@@ -26,8 +26,49 @@
 #include <linux/landlock.h>
 #include <stdint.h>
 #include <fcntl.h>
+#include <sys/prctl.h>
 
-int ll_create_ruleset(const struct landlock_ruleset_attr *const attr,
-                  const size_t size, const __u32 flags) {
+static inline int ll_create_ruleset(const struct landlock_ruleset_attr *const attr,
+				    const size_t size, const __u32 flags) {
     return syscall(__NR_landlock_create_ruleset, attr, size, flags);
-} 
+}
+
+static inline int ll_add_rule(const int ruleset_fd,
+			      const enum landlock_rule_type rule_type,
+			      const void *const rule_attr,
+			      const __u32 flags) {
+    return syscall(__NR_landlock_add_rule, ruleset_fd, rule_type, rule_attr, flags);
+}
+
+static inline int ll_restrict_self(const int ruleset_fd, const __u32 flags) {
+    return syscall(__NR_landlock_restrict_self, ruleset_fd, flags);
+}
+
+int scm_ll_abi_version() {
+    return ll_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION);
+}
+
+int scm_ll_create_ruleset(long handled_access_fs, long handled_access_net,
+                          long scoped) {
+    struct landlock_ruleset_attr attr = {.handled_access_fs = handled_access_fs,
+					 .handled_access_net = handled_access_net,
+					 .scoped = scoped};
+    
+    return ll_create_ruleset(&attr, sizeof(attr), 0);
+}
+
+int scm_ll_add_net_port_rule(int ruleset_fd, long allowed_access, int port) {
+  struct landlock_net_port_attr attr = {.allowed_access = allowed_access,
+                                        .port = port};
+
+  return ll_add_rule(ruleset_fd, LANDLOCK_RULE_NET_PORT, &attr, 0);
+}
+
+int scm_ll_restrict_self(int ruleset_fd) {
+  int ret = prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+  if (ret) {
+      return ret;
+  }
+
+  return ll_restrict_self(ruleset_fd, 0);
+}

@@ -20,7 +20,7 @@
 
 (use-modules (ice-9 rdelim)
 	     (ffi landlock))
-,9
+
 (define (read-test-file)
   (display (read-line
 	    (open-input-file (string-append (dirname (current-filename)) "/test.txt")))))

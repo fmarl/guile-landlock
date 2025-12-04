@@ -20,11 +20,11 @@
 
 #define _GNU_SOURCE
 
+#include <errno.h>
 #include <unistd.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <linux/landlock.h>
-#include <stdint.h>
 #include <fcntl.h>
 #include <sys/prctl.h>
 
@@ -58,17 +58,39 @@ int scm_ll_create_ruleset(long handled_access_fs, long handled_access_net,
 }
 
 int scm_ll_add_net_port_rule(int ruleset_fd, long allowed_access, int port) {
-  struct landlock_net_port_attr attr = {.allowed_access = allowed_access,
-                                        .port = port};
+    struct landlock_net_port_attr attr = {.allowed_access = allowed_access,
+					  .port = port};
 
-  return ll_add_rule(ruleset_fd, LANDLOCK_RULE_NET_PORT, &attr, 0);
+    return ll_add_rule(ruleset_fd, LANDLOCK_RULE_NET_PORT, &attr, 0);
+}
+
+int scm_ll_add_path_beneath_rule(int ruleset_fd, long allowed_access,
+                                 char *path, int ignore_if_missing) {
+    struct landlock_path_beneath_attr path_beneath = {
+	.allowed_access = allowed_access
+    };
+  
+    path_beneath.parent_fd = open(path, O_PATH | O_CLOEXEC);
+
+    if (path_beneath.parent_fd < 0) {
+	if ((path_beneath.parent_fd == -ENOENT || path_beneath.parent_fd == -EPERM) && ignore_if_missing) {
+	    path_beneath.parent_fd = 0;
+        }
+	
+	return path_beneath.parent_fd;
+    }
+
+    int ret = ll_add_rule(ruleset_fd, LANDLOCK_RULE_PATH_BENEATH, &path_beneath, 0);
+    close(path_beneath.parent_fd);
+    
+    return ret;
 }
 
 int scm_ll_restrict_self(int ruleset_fd) {
-  int ret = prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
-  if (ret) {
-      return ret;
-  }
+    int ret = prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+    if (ret) {
+	return ret;
+    }
 
-  return ll_restrict_self(ruleset_fd, 0);
+    return ll_restrict_self(ruleset_fd, 0);
 }

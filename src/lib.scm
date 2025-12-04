@@ -32,11 +32,11 @@
   (scope scope-mask))
 
 (define-record-type <landlock-ruleset>
-  (make-landlock-ruleset fd fs-mask net-mask)
+  (make-landlock-ruleset fd fs-downgrade-procedure net-downgrade-procedure)
   landlock-ruleset?
   (fd ruleset-fd)
-  (fs-mask ruleset-fs-mask)
-  (net-mask ruleset-net-mask))
+  (fs-downgrade-procedure fs-downgrade)
+  (net-downgrade-procedure net-downgrade))
 
 (define shim "./shim.so")
 
@@ -54,6 +54,11 @@
   (foreign-library-function shim "scm_ll_add_net_port_rule"
 			    #:return-type int
 			    #:arg-types (list int long int)))
+
+(define ffi-landlock-add-path-beneath-rule
+  (foreign-library-function shim "scm_ll_add_path_beneath_rule"
+			    #:return-type int
+			    #:arg-types (list int long '* int)))
 
 (define ffi-landlock-restrict-self
   (foreign-library-function shim "scm_ll_restrict_self"
@@ -115,6 +120,10 @@
     (if (and best-effort (= downgrade-access access))
 	downgrade-access
 	#nil)))
+
+(define (landlock-add-path-beneath-rule access ignore-if-missing path ruleset)
+  (if (not (nil? (fs-downgrade ruleset)))
+      (ffi-landlock-add-path-beneath-rule (ruleset-fd ruleset) access path (= ignore-if-missing 0))))
 
 (define* (landlock-create-ruleset #:key (best-effort #t) (scoped 0))
   (begin

@@ -25,11 +25,18 @@
 	    landlock-create-ruleset))
 
 (define-record-type <landlock-capabilities>
-  (make-landlock-capabilities fs-mask net-mask scope-mask)
+  (make-landlock-capabilities fs net scope)
   landlock-capabilities?
-  (fs-mask landlock-capabilities)
-  (net-mask landlock-capabilities)
-  (scope-mask landlock-capabilities))
+  (fs fs-mask)
+  (net net-mask)
+  (scope scope-mask))
+
+(define-record-type <landlock-ruleset>
+  (make-landlock-ruleset fd fs-mask net-mask)
+  landlock-ruleset?
+  (fd ruleset-fd)
+  (fs-mask ruleset-fs-mask)
+  (net-mask ruleset-net-mask))
 
 (define shim "./shim.so")
 
@@ -99,27 +106,25 @@
   (cond ((eq? access 'BIND_TCP) (ash 1 0))
         ((eq? access 'CONNECT_TCP) (ash 1 1))))
 
-(define (landlock-access-scope scope)
-  (cond ((eq? scope 'ABSTRACT_UNIX_SOCKET) (ash 1 0))
-        ((eq? scope 'SIGNAL) (ash 1 1))))
+(define (landlock-access-scope access)
+  (cond ((eq? access 'ABSTRACT_UNIX_SOCKET) (ash 1 0))
+        ((eq? access 'SIGNAL) (ash 1 1))))
 
 (define (landlock-downgrade best-effort access-mask access)
   (let ((downgrade-access (logand access-mask access)))
-    (if (and (best-effort) (downgrade-access))
+    (if (and best-effort (= downgrade-access access))
 	downgrade-access
 	#nil)))
 
-(define* (landlock-create-ruleset #:key (best-effort #t) (scope '()))
+(define* (landlock-create-ruleset #:key (best-effort #t) (scoped 0))
   (begin
     (if (not (landlock-supported?))
 	(throw 'unsupported-error
-	       (format #f "Landlock isn't supported on this system."))
-	'())
+	       (format #f "Landlock isn't supported on this system.")))
     (let* ((cap (landlock-get-capabilities (landlock-abi-version)))
-	   (access-mask (scope-mask cap))
-	   (scope-mask (landlock-access-scope scope))
-	   (downgrade-access (landlock-downgrade best-effort access-mask scope-mask)))
-      (if (not (nil? downgrade-access))
-	  (let ((fd (ffi-landlock-create-ruleset (fs-mask cap) (net-mask cap) downgrade-access)))
+	   (access-downgraded (landlock-downgrade best-effort (scope-mask cap) scoped)))
+      (if (not (nil? access-downgraded))
+	  (let ((fd (ffi-landlock-create-ruleset (fs-mask cap) (net-mask cap) access-downgraded)))
 	    (if (> fd 0)
-		)))))
+		(make-landlock-ruleset fd (lambda x (landlock-downgrade best-effort fs-mask x)) (lambda x (landlock-downgrade best-effort net-mask x)))
+		#nil))))))

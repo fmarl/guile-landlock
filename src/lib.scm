@@ -21,14 +21,15 @@
   #:use-module (system foreign)
   #:use-module (srfi srfi-9)
   #:export (landlock-abi-version
-	    landlock-supported?))
+	    landlock-supported?
+	    landlock-create-ruleset))
 
-(define-record-type <capabilities>
-  (make-capabilities fs-mask net-mask scope-mask)
-  capabilities?
-  (fs-mask capabilities)
-  (net-mask capabilities)
-  (scope-mask capabilities))
+(define-record-type <landlock-capabilities>
+  (make-landlock-capabilities fs-mask net-mask scope-mask)
+  landlock-capabilities?
+  (fs-mask landlock-capabilities)
+  (net-mask landlock-capabilities)
+  (scope-mask landlock-capabilities))
 
 (define shim "./shim.so")
 
@@ -66,15 +67,15 @@
 (define (landlock-supported?)
   (not (eq? (landlock-abi-version) 'V0)))
 
-(define (landlock-capabilities abi)
-  (cond ((eq? abi 'V1) (make-capabilities (- (ash 1 13) 1) 0 0))
-        ((eq? abi 'V2) (make-capabilities (- (ash 1 14) 1) 0 0))
-        ((eq? abi 'V3) (make-capabilities (- (ash 1 15) 1) 0 0))
-        ((eq? abi 'V4) (make-capabilities (- (ash 1 15) 1) (- (ash 1 2) 1) 0))
-        ((eq? abi 'V5) (make-capabilities (- (ash 1 16) 1) (- (ash 1 2) 1) 0))
-        ((eq? abi 'V6) (make-capabilities (- (ash 1 16) 1) (- (ash 1 2) 1) (- (ash 1 2) 1)))
-        ((eq? abi 'V7) (make-capabilities (- (ash 1 16) 1) (- (ash 1 2) 1) (- (ash 1 2) 1)))
-        (else (make-capabilities 0 0 0))))
+(define (landlock-get-capabilities abi)
+  (cond ((eq? abi 'V1) (make-landlock-capabilities (- (ash 1 13) 1) 0 0))
+        ((eq? abi 'V2) (make-landlock-capabilities (- (ash 1 14) 1) 0 0))
+        ((eq? abi 'V3) (make-landlock-capabilities (- (ash 1 15) 1) 0 0))
+        ((eq? abi 'V4) (make-landlock-capabilities (- (ash 1 15) 1) (- (ash 1 2) 1) 0))
+        ((eq? abi 'V5) (make-landlock-capabilities (- (ash 1 16) 1) (- (ash 1 2) 1) 0))
+        ((eq? abi 'V6) (make-landlock-capabilities (- (ash 1 16) 1) (- (ash 1 2) 1) (- (ash 1 2) 1)))
+        ((eq? abi 'V7) (make-landlock-capabilities (- (ash 1 16) 1) (- (ash 1 2) 1) (- (ash 1 2) 1)))
+        (else (make-landlock-capabilities 0 0 0))))
 
 (define (landlock-access-fs access)
   (cond ((eq? access 'EXECUTE) (ash 1 0))
@@ -98,6 +99,27 @@
   (cond ((eq? access 'BIND_TCP) (ash 1 0))
         ((eq? access 'CONNECT_TCP) (ash 1 1))))
 
-(define (landlock-access-scope access)
-  (cond ((eq? access 'ABSTRACT_UNIX_SOCKET) (ash 1 0))
-        ((eq? access 'SIGNAL) (ash 1 1))))
+(define (landlock-access-scope scope)
+  (cond ((eq? scope 'ABSTRACT_UNIX_SOCKET) (ash 1 0))
+        ((eq? scope 'SIGNAL) (ash 1 1))))
+
+(define (landlock-downgrade best-effort access-mask access)
+  (let ((downgrade-access (logand access-mask access)))
+    (if (and (best-effort) (downgrade-access))
+	downgrade-access
+	#nil)))
+
+(define* (landlock-create-ruleset #:key (best-effort #t) (scope '()))
+  (begin
+    (if (not (landlock-supported?))
+	(throw 'unsupported-error
+	       (format #f "Landlock isn't supported on this system."))
+	'())
+    (let* ((cap (landlock-get-capabilities (landlock-abi-version)))
+	   (access-mask (scope-mask cap))
+	   (scope-mask (landlock-access-scope scope))
+	   (downgrade-access (landlock-downgrade best-effort access-mask scope-mask)))
+      (if (not (nil? downgrade-access))
+	  (let ((fd (ffi-landlock-create-ruleset (fs-mask cap) (net-mask cap) downgrade-access)))
+	    (if (> fd 0)
+		)))))

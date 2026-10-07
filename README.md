@@ -1,9 +1,7 @@
 # guile-landlock
 
-Guile bindings for [Landlock](https://docs.kernel.org/userspace-api/landlock.html).
-Pure Guile, supports Landlock ABI 1 to 10.
-
-## Usage
+Guile bindings for [Landlock](https://docs.kernel.org/userspace-api/landlock.html),
+ABI 1 to 10.  Pure Guile, no C code.
 
 ```scheme
 (use-modules (landlock))
@@ -14,40 +12,42 @@ Pure Guile, supports Landlock ABI 1 to 10.
        (landlock-path "/etc/ssl" '(read-file read-dir) #:optional? #t)
        (landlock-port 443 '(connect-tcp)))
  #:scope '(signal abstract-unix-socket))
-;; => fully-enforced, partially-enforced or not-enforced
 ```
 
-- `(landlock-path path access #:optional? #:quiet?)` allows `access` beneath
-  `path`.  Missing `#:optional?` paths are skipped.
-- `(landlock-port port access #:quiet?)` allows `access` on `port`.
+## API
 
-Keyword arguments of `landlock-restrict!`:
+`(landlock-path path access #:optional? #:quiet?)` allows `access` beneath
+`path`.  An `#:optional?` path that doesn't exist is skipped.
+
+`(landlock-port port access #:quiet?)` allows `access` on `port`.
+
+`(landlock-restrict! rules #:key ...)` restricts the calling thread and its
+children.  Returns `fully-enforced`, `partially-enforced` or `not-enforced`.
 
 | Keyword | Default | |
 |---|---|---|
-| `#:fs` | `'all` | Filesystem rights denied unless allowed by a rule |
-| `#:net` | `'all` | Network rights denied unless allowed by a rule |
+| `#:fs`, `#:net` | `'all` | Rights denied unless a rule allows them |
 | `#:scope` | `'()` | `signal`, `abstract-unix-socket` |
-| `#:quiet-fs`, `#:quiet-net`, `#:quiet-scope` | `'()` | Rights whose denials aren't logged for `#:quiet? #t` rules |
-| `#:flags` | `'()` | `log-same-exec-off`, `log-new-exec-on`, `log-subdomains-off`, `tsync` |
-| `#:best-effort?` | `#t` | Ignore unsupported rights and rule rights missing from `#:fs`/`#:net` instead of raising a `landlock-error` |
+| `#:quiet-fs`, `#:quiet-net`, `#:quiet-scope` | `'()` | Rights whose denials aren't logged; `#:quiet-fs` and `#:quiet-net` only apply to `#:quiet? #t` rules |
+| `#:flags` | `'()` | `log-same-exec-off`, `log-new-exec-on`, `log-subdomains-off`, `tsync` (all threads) |
+| `#:best-effort?` | `#t` | Drop what the kernel or ruleset can't handle; `#f` raises `landlock-error` instead |
 
-Only the calling thread is restricted unless `#:flags` contains `tsync`.
+`(landlock-exec rules command . options)` restricts the process and executes
+`command`, a list of the program path and its arguments.  It raises
+`landlock-error` instead of running `command` unrestricted.
+
+`(landlock-abi-version)` returns 0 without Landlock.  Failing system calls
+raise `system-error`.
 
 Filesystem rights: `execute`, `write-file`, `read-file`, `read-dir`,
 `remove-dir`, `remove-file`, `make-char`, `make-dir`, `make-reg`, `make-sock`,
 `make-fifo`, `make-block`, `make-sym`, `refer`, `truncate`, `ioctl-dev`,
-`resolve-unix`.  `%landlock-read-access` contains `execute`, `read-file` and
-`read-dir`, `%landlock-write-access` the rest.
+`resolve-unix`.  `%landlock-read-access` is `execute`, `read-file` and
+`read-dir`; `%landlock-write-access` is the rest.
 
 Network rights: `bind-tcp`, `connect-tcp`, `bind-udp`, `connect-send-udp`.
 
-`(landlock-abi-version)` returns 0 if Landlock is unavailable.  Failing system
-calls raise `system-error`.
-
 ## Wrapping Guix packages
-
-`landlock-exec` restricts the process and executes a command:
 
 ```scheme
 (use-modules (guix gexp) (gnu packages base))
@@ -65,8 +65,8 @@ calls raise `system-error`.
                        #:net '()))))
 ```
 
-The wrapped program needs `/gnu/store` to load its libraries.  Many files in
-`/etc` on Guix System are symlinks into the store.
+The program needs read access to `/gnu/store` for its libraries.  On Guix
+System, many files in `/etc` link into the store.
 
 ## Development
 

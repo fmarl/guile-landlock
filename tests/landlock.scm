@@ -209,6 +209,16 @@
 	   (landlock-restrict!
 	    (list (landlock-path "/nonexistent" '(read-file)))))
 	 (lambda args (system-error-errno args))))))
+  (test-equal "strict mode rejects directory rights on files"
+    `(,test-file (read-dir))
+    (in-child
+     (lambda ()
+       (landlock-error-irritants
+	(lambda ()
+	  (landlock-restrict! (list (landlock-path test-file
+						   '(read-file read-dir)))
+			      #:fs '(read-file read-dir) #:net '()
+			      #:best-effort? #f))))))
   (call-with-temporary-file
    (lambda (outside)
      (let ((cat (search-path (parse-path (getenv "PATH")) "cat"))

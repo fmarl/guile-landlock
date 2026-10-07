@@ -256,7 +256,15 @@ doesn't exist or isn't accessible."
 (define %file-access
   '(execute write-file read-file truncate ioctl-dev resolve-unix))
 
-(define (add-rule! ruleset-fd rule abi masks)
+;; The kernel rejects directory rights on files.
+(define (file-mask path access mask abi best-effort?)
+  (let ((directory-access (lset-difference eq? access %file-access)))
+    (when (and (not best-effort?) (pair? directory-access))
+      (raise-landlock-error "directory access rights on a file"
+			    path directory-access))
+    (logand mask (names->mask %fs-access %file-access abi))))
+
+(define (add-rule! ruleset-fd rule abi masks best-effort?)
   "Add RULE to RULESET-FD, limited to the rights handled by MASKS."
   ;; The kernel rejects quiet rules without access if nothing is quiet.
   (define (quiet-flag quiet? quiet-mask)
@@ -272,11 +280,10 @@ doesn't exist or isn't accessible."
 	     (when fd
 	       (call-with-fdes fd
 		 (lambda (fd)
-		   ;; The kernel rejects directory rights on files.
 		   (let ((mask (if (eq? 'directory (stat:type (stat fd)))
 				   mask
-				   (logand mask (names->mask %fs-access
-							     %file-access abi)))))
+				   (file-mask path access mask abi
+					      best-effort?))))
 		     (unless (and (zero? mask) (zero? flags))
 		       (add-rule ruleset-fd %rule-path-beneath
 				 (bytevector->pointer
@@ -326,14 +333,14 @@ doesn't handle."
 	   (logand fs quiet-fs) (logand net quiet-net)
 	   (logand scope quiet-scope)))))
 
-(define (enforce! abi rules attr flags)
+(define (enforce! abi rules attr flags best-effort?)
   (let ((masks (attr-masks abi attr)))
     (call-with-fdes
      (create-ruleset (bytevector->pointer (apply u64-struct masks))
 		     (* 8 (length %ruleset-attr-tables))
 		     0)
      (lambda (ruleset-fd)
-       (for-each (cut add-rule! ruleset-fd <> abi masks) rules)
+       (for-each (cut add-rule! ruleset-fd <> abi masks best-effort?) rules)
        (set-no-new-privs!)
        (restrict-self ruleset-fd (names->mask %restrict-flags flags abi))))))
 
@@ -362,7 +369,7 @@ Return 'fully-enforced, 'partially-enforced or 'not-enforced."
      ((or (zero? abi) (every zero? (take (attr-masks abi attr) 3)))
       'not-enforced)
      (else
-      (enforce! abi rules attr flags)
+      (enforce! abi rules attr flags best-effort?)
       (if (null? missing) 'fully-enforced 'partially-enforced)))))
 
 (define (landlock-exec rules command . options)

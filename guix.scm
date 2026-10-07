@@ -1,8 +1,8 @@
 (use-modules (guix gexp)
-	     (guix packages)
-	     (guix build-system guile)
-	     ((guix licenses) #:prefix license:)
-	     (gnu packages guile))
+             (guix packages)
+             (guix build-system guile)
+             ((guix licenses) #:prefix license:)
+             (gnu packages guile))
 
 (define %source-dir (dirname (current-filename)))
 
@@ -10,9 +10,9 @@
   (name "guile-landlock")
   (version "0.1.0-git")
   (source (local-file %source-dir "guile-landlock-checkout"
-		      #:recursive? #t
-		      #:select? (lambda (file stat)
-				  (not (string=? (basename file) ".git")))))
+                      #:recursive? #t
+                      #:select? (lambda (file stat)
+                                  (not (string=? (basename file) ".git")))))
   (build-system guile-build-system)
   (arguments
    (list #:source-directory "src"))

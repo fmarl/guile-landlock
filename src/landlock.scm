@@ -42,11 +42,6 @@
 
 	    landlock-error?))
 
-;;;
-;;; Access rights and flags.
-;;;
-
-;; Entries are (NAME BIT ABI), ABI being the version that introduced NAME.
 (define %fs-access
   '((execute 0 1)
     (write-file 1 1)
@@ -130,10 +125,6 @@
 	      ((_ since) (< abi since))))
 	  names))
 
-;;;
-;;; Rules.
-;;;
-
 (define-record-type <landlock-path>
   (make-landlock-path path access optional? quiet?)
   landlock-path?
@@ -168,11 +159,6 @@ logged for the access rights given as #:quiet-fs to landlock-restrict!."
      (append (unsupported %net-access access abi)
 	     (if (and quiet? (< abi %quiet-abi)) '(quiet) '())))))
 
-;;;
-;;; System calls.
-;;;
-
-;; Same on all architectures except alpha.
 (define %landlock-create-ruleset 444)
 (define %landlock-add-rule 445)
 (define %landlock-restrict-self 446)
@@ -241,10 +227,6 @@ logged for the access rights given as #:quiet-fs to landlock-restrict!."
 		(cut proc fd)
 		(cut close-fdes fd)))
 
-;;;
-;;; ABI.
-;;;
-
 (define (landlock-abi-version)
   "Return the Landlock ABI version of the running kernel, or 0 if Landlock is
 unsupported or disabled."
@@ -260,10 +242,6 @@ unsupported or disabled."
 #f if the kernel doesn't report errata."
   (and (>= (landlock-abi-version) 7)
        (create-ruleset %null-pointer 0 %create-ruleset-errata)))
-
-;;;
-;;; Enforcement.
-;;;
 
 (define (open-path path optional?)
   "Return an O_PATH file descriptor for PATH, or #f if PATH is OPTIONAL? and
@@ -309,8 +287,6 @@ doesn't exist or isn't accessible."
 		   (bytevector->pointer (u64-struct mask port))
 		   flags))))))
 
-;; Fields of struct landlock_ruleset_attr as of ABI 10.  Older kernels accept
-;; it if the fields unknown to them are zero.
 (define %ruleset-attr-tables
   (list %fs-access %net-access %scopes
 	(quiet-table %fs-access) (quiet-table %net-access) (quiet-table %scopes)))

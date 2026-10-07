@@ -328,17 +328,9 @@ support.  ATTR lists the names for each of %ruleset-attr-tables."
 			     (quiet-fs '()) (quiet-net '()) (quiet-scope '())
 			     (flags '())
 			     (best-effort? #t))
-  "Restrict the calling thread and its future children to RULES, a list of
-landlock-path and landlock-port rules.
-
-FS and NET list the access rights denied unless a rule allows them, 'all by
-default.  SCOPE lists the IPC scopes to isolate, 'abstract-unix-socket and
-'signal.  Denials of QUIET-FS, QUIET-NET and QUIET-SCOPE aren't logged.  FLAGS
-are passed to landlock_restrict_self; 'tsync restricts all threads.
-
-In BEST-EFFORT? mode, unsupported access rights and flags as well as rule
-access rights missing from FS or NET are ignored, otherwise they raise a
-landlock-error.  Return 'fully-enforced, 'partially-enforced or 'not-enforced."
+  "Restrict the calling thread and its future children to RULES.  Without
+BEST-EFFORT?, raise a landlock-error for anything that can't be enforced.
+Return 'fully-enforced, 'partially-enforced or 'not-enforced."
   (let* ((abi (landlock-abi-version))
 	 (attr (map expand %ruleset-attr-tables
 		    (list fs net scope quiet-fs quiet-net quiet-scope)))

@@ -45,6 +45,13 @@
      (close-port sock)
      #t)))
 
+(define (connect-unix file)
+  (false-if-exception
+   (let ((sock (socket AF_UNIX SOCK_STREAM 0)))
+     (connect sock AF_UNIX file)
+     (close-port sock)
+     #t)))
+
 (define (call-with-temporary-file proc)
   (let* ((port (mkstemp! (string-copy "/tmp/guile-landlock-XXXXXX")))
 	 (name (port-filename port)))
@@ -53,6 +60,17 @@
     (dynamic-wind (const #t)
 		  (lambda () (proc name))
 		  (lambda () (delete-file name)))))
+
+(define (call-with-unix-server proc)
+  (let ((file (format #f "/tmp/guile-landlock-~a.sock" (getpid)))
+	(sock (socket AF_UNIX SOCK_STREAM 0)))
+    (bind sock AF_UNIX file)
+    (listen sock 1)
+    (dynamic-wind (const #t)
+		  (lambda () (proc file))
+		  (lambda ()
+		    (close-port sock)
+		    (delete-file file)))))
 
 ;; Return the value of THUNK in a child process, or #f if it raises.
 (define (in-child thunk)
@@ -210,7 +228,16 @@
 	      #:flags '(log-same-exec-off tsync)
 	      #:best-effort? #f)
 	     (bind-udp 0)
-	     (bind-udp 54321))))))
+	     (bind-udp 54321)))))
+  (call-with-unix-server
+   (lambda (file)
+     (test-equal "resolve-unix on a socket file"
+       '(fully-enforced #t)
+       (in-child
+	(lambda ()
+	  (list (landlock-restrict! (list (landlock-path file '(resolve-unix)))
+				    #:best-effort? #f)
+		(connect-unix file))))))))
 
 (define failures (test-runner-fail-count (test-runner-current)))
 (test-end "landlock")

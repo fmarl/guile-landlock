@@ -254,7 +254,7 @@ doesn't exist or isn't accessible."
 	  (apply throw args)))))
 
 (define %file-access
-  '(execute write-file read-file truncate ioctl-dev))
+  '(execute write-file read-file truncate ioctl-dev resolve-unix))
 
 (define (add-rule! ruleset-fd rule abi handled-fs handled-net)
   "Add RULE to RULESET-FD, limited to HANDLED-FS and HANDLED-NET."

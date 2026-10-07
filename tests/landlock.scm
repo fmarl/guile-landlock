@@ -229,6 +229,30 @@
 	      #:best-effort? #f)
 	     (bind-udp 0)
 	     (bind-udp 54321)))))
+  (test-equal "quiet rule without access"
+    'fully-enforced
+    (in-child
+     (lambda ()
+       (landlock-restrict! (list (landlock-path test-dir '() #:quiet? #t))
+			   #:quiet-fs '(read-file)
+			   #:best-effort? #f))))
+  (test-equal "quiet rule without access isn't skipped"
+    ENOENT
+    (in-child
+     (lambda ()
+       (catch 'system-error
+	 (lambda ()
+	   (landlock-restrict! (list (landlock-path "/nonexistent" '()
+						    #:quiet? #t))
+			       #:quiet-fs '(read-file)))
+	 (lambda args (system-error-errno args))))))
+  (test-equal "quiet rule without handled rights"
+    'fully-enforced
+    (in-child
+     (lambda ()
+       (landlock-restrict! (list (landlock-path test-dir '(read-file)
+						#:quiet? #t))
+			   #:fs '(write-file)))))
   (call-with-unix-server
    (lambda (file)
      (test-equal "resolve-unix on a socket file"

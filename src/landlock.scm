@@ -256,36 +256,39 @@ doesn't exist or isn't accessible."
 (define %file-access
   '(execute write-file read-file truncate ioctl-dev resolve-unix))
 
-(define (add-rule! ruleset-fd rule abi handled-fs handled-net)
-  "Add RULE to RULESET-FD, limited to HANDLED-FS and HANDLED-NET."
-  (define (quiet-flag quiet?)
-    (if (and quiet? (>= abi %quiet-abi)) %add-rule-quiet 0))
+(define (add-rule! ruleset-fd rule abi masks)
+  "Add RULE to RULESET-FD, limited to the rights handled by MASKS."
+  ;; The kernel rejects quiet rules without access if nothing is quiet.
+  (define (quiet-flag quiet? quiet-mask)
+    (if (and quiet? (not (zero? quiet-mask))) %add-rule-quiet 0))
 
-  (match rule
-    (($ <landlock-path> path access optional? quiet?)
-     (let ((mask (logand handled-fs (names->mask %fs-access access abi)))
-	   (flags (quiet-flag quiet?)))
-       (unless (and (zero? mask) (zero? flags))
-	 (let ((fd (open-path path optional?)))
-	   (when fd
-	     (call-with-fdes fd
-	       (lambda (fd)
-		 ;; The kernel rejects directory rights on files.
-		 (let ((mask (if (eq? 'directory (stat:type (stat fd)))
-				 mask
-				 (logand mask (names->mask %fs-access
-							   %file-access abi)))))
-		   (unless (and (zero? mask) (zero? flags))
-		     (add-rule ruleset-fd %rule-path-beneath
-			       (bytevector->pointer (path-beneath-attr mask fd))
-			       flags))))))))))
-    (($ <landlock-port> port access quiet?)
-     (let ((mask (logand handled-net (names->mask %net-access access abi)))
-	   (flags (quiet-flag quiet?)))
-       (unless (and (zero? mask) (zero? flags))
-	 (add-rule ruleset-fd %rule-net-port
-		   (bytevector->pointer (u64-struct mask port))
-		   flags))))))
+  (match-let (((fs net _ quiet-fs quiet-net _) masks))
+    (match rule
+      (($ <landlock-path> path access optional? quiet?)
+       (let ((mask (logand fs (names->mask %fs-access access abi)))
+	     (flags (quiet-flag quiet? quiet-fs)))
+	 (unless (and (zero? mask) (zero? flags))
+	   (let ((fd (open-path path optional?)))
+	     (when fd
+	       (call-with-fdes fd
+		 (lambda (fd)
+		   ;; The kernel rejects directory rights on files.
+		   (let ((mask (if (eq? 'directory (stat:type (stat fd)))
+				   mask
+				   (logand mask (names->mask %fs-access
+							     %file-access abi)))))
+		     (unless (and (zero? mask) (zero? flags))
+		       (add-rule ruleset-fd %rule-path-beneath
+				 (bytevector->pointer
+				  (path-beneath-attr mask fd))
+				 flags))))))))))
+      (($ <landlock-port> port access quiet?)
+       (let ((mask (logand net (names->mask %net-access access abi)))
+	     (flags (quiet-flag quiet? quiet-net)))
+	 (unless (and (zero? mask) (zero? flags))
+	   (add-rule ruleset-fd %rule-net-port
+		     (bytevector->pointer (u64-struct mask port))
+		     flags)))))))
 
 (define %ruleset-attr-tables
   (list %fs-access %net-access %scopes
@@ -317,8 +320,7 @@ support.  ATTR lists the names for each of %ruleset-attr-tables."
 		     (* 8 (length %ruleset-attr-tables))
 		     0)
      (lambda (ruleset-fd)
-       (for-each (cut add-rule! ruleset-fd <> abi (first masks) (second masks))
-		 rules)
+       (for-each (cut add-rule! ruleset-fd <> abi masks) rules)
        (set-no-new-privs!)
        (restrict-self ruleset-fd (names->mask %restrict-flags flags abi))))))
 

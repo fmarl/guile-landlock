@@ -150,13 +150,19 @@
      10 '() '((read-file) (bind-udp) (signal) (read-file) (bind-udp) (signal)) '(tsync))))
 
 (test-group "unhandled access"
-  (test-equal "strict mode raises an error"
+  (test-equal "strict mode rejects unhandled rule rights"
     '((read-dir bind-tcp))
     (landlock-error-irritants
      (lambda ()
        (landlock-restrict! (list (landlock-path test-dir '(read-file read-dir))
 				 (landlock-port 80 '(bind-tcp)))
 			   #:fs '(read-file) #:net '(connect-tcp)
+			   #:best-effort? #f))))
+  (test-equal "strict mode rejects unhandled quiet rights"
+    '((read-file))
+    (landlock-error-irritants
+     (lambda ()
+       (landlock-restrict! '() #:fs '(write-file) #:quiet-fs '(read-file)
 			   #:best-effort? #f))))
   (test-assert "best-effort mode drops unhandled rights"
     (memq (in-child
@@ -253,6 +259,11 @@
        (landlock-restrict! (list (landlock-path test-dir '(read-file)
 						#:quiet? #t))
 			   #:fs '(write-file)))))
+  (test-equal "best-effort mode drops unhandled quiet rights"
+    'fully-enforced
+    (in-child
+     (lambda ()
+       (landlock-restrict! '() #:fs '(write-file) #:quiet-fs '(read-file)))))
   (call-with-unix-server
    (lambda (file)
      (test-equal "resolve-unix on a socket file"

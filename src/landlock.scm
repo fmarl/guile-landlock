@@ -302,16 +302,29 @@ support.  ATTR lists the names for each of %ruleset-attr-tables."
 	   (unsupported %restrict-flags flags abi)
 	   (append-map (cut rule-unsupported <> abi) rules))))
 
-(define (unhandled-access rules fs net)
-  "Return the access rights in RULES that aren't in FS or NET."
-  (delete-duplicates
-   (append-map (match-lambda
-		 (($ <landlock-path> _ access) (lset-difference eq? access fs))
-		 (($ <landlock-port> _ access) (lset-difference eq? access net)))
-	       rules)))
+(define (unhandled-access rules attr)
+  "Return the access rights in RULES and in the quiet lists of ATTR that ATTR
+doesn't handle."
+  (match attr
+    ((fs net scope quiet-fs quiet-net quiet-scope)
+     (delete-duplicates
+      (append (append-map (match-lambda
+			    (($ <landlock-path> _ access)
+			     (lset-difference eq? access fs))
+			    (($ <landlock-port> _ access)
+			     (lset-difference eq? access net)))
+			  rules)
+	      (lset-difference eq? quiet-fs fs)
+	      (lset-difference eq? quiet-net net)
+	      (lset-difference eq? quiet-scope scope))))))
 
+;; The kernel rejects quiet rights that aren't handled.
 (define (attr-masks abi attr)
-  (map (cut names->mask <> <> abi) %ruleset-attr-tables attr))
+  (match (map (cut names->mask <> <> abi) %ruleset-attr-tables attr)
+    ((fs net scope quiet-fs quiet-net quiet-scope)
+     (list fs net scope
+	   (logand fs quiet-fs) (logand net quiet-net)
+	   (logand scope quiet-scope)))))
 
 (define (enforce! abi rules attr flags)
   (let ((masks (attr-masks abi attr)))
@@ -336,12 +349,12 @@ Return 'fully-enforced, 'partially-enforced or 'not-enforced."
   (let* ((abi (landlock-abi-version))
 	 (attr (map expand %ruleset-attr-tables
 		    (list fs net scope quiet-fs quiet-net quiet-scope)))
-	 (unhandled (unhandled-access rules (first attr) (second attr)))
+	 (unhandled (unhandled-access rules attr))
 	 (missing (missing-features abi rules attr flags)))
     (cond
      ((and (not best-effort?) (pair? unhandled))
-      (raise-landlock-error
-       "rules allow access rights not handled by the ruleset" unhandled))
+      (raise-landlock-error "access rights not handled by the ruleset"
+			    unhandled))
      ((and (not best-effort?) (pair? missing))
       (raise-landlock-error
        (format #f "not supported by Landlock ABI ~a" abi) missing))

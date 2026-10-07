@@ -172,6 +172,15 @@
 	      #:fs '(read-file) #:net '())))
 	  '(fully-enforced not-enforced))))
 
+(test-group "exec"
+  (test-equal "landlock-exec refuses to run unrestricted"
+    '(("true"))
+    (in-child
+     (lambda ()
+       (landlock-error-irritants
+	(lambda ()
+	  (landlock-exec '() '("true") #:fs '() #:net '())))))))
+
 (unless (< 0 abi 10)
   (test-skip "strict mode"))
 

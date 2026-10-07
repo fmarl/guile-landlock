@@ -374,6 +374,8 @@ Return 'fully-enforced, 'partially-enforced or 'not-enforced."
 
 (define (landlock-exec rules command . options)
   "Restrict the process to RULES, see landlock-restrict! for OPTIONS, and
-replace it with COMMAND, a list of the program and its arguments."
-  (apply landlock-restrict! rules options)
+replace it with COMMAND, a list of the program and its arguments.  Raise a
+landlock-error instead of running COMMAND unrestricted."
+  (when (eq? 'not-enforced (apply landlock-restrict! rules options))
+    (raise-landlock-error "Landlock isn't enforced" command))
   (apply execl (first command) command))

@@ -17,12 +17,12 @@
 ;; File: landlock.scm
 
 (use-modules (ice-9 exceptions)
-	     (ice-9 match)
-	     (srfi srfi-1)
-	     (srfi srfi-26)
-	     (ice-9 rdelim)
-	     (srfi srfi-64)
-	     (landlock))
+             (ice-9 match)
+             (srfi srfi-1)
+             (srfi srfi-26)
+             (ice-9 rdelim)
+             (srfi srfi-64)
+             (landlock))
 
 (define names->mask (@@ (landlock) names->mask))
 (define unsupported (@@ (landlock) unsupported))
@@ -54,23 +54,23 @@
 
 (define (call-with-temporary-file proc)
   (let* ((port (mkstemp! (string-copy "/tmp/guile-landlock-XXXXXX")))
-	 (name (port-filename port)))
+         (name (port-filename port)))
     (display "outside" port)
     (close-port port)
     (dynamic-wind (const #t)
-		  (lambda () (proc name))
-		  (lambda () (delete-file name)))))
+                  (lambda () (proc name))
+                  (lambda () (delete-file name)))))
 
 (define (call-with-unix-server proc)
   (let ((file (format #f "/tmp/guile-landlock-~a.sock" (getpid)))
-	(sock (socket AF_UNIX SOCK_STREAM 0)))
+        (sock (socket AF_UNIX SOCK_STREAM 0)))
     (bind sock AF_UNIX file)
     (listen sock 1)
     (dynamic-wind (const #t)
-		  (lambda () (proc file))
-		  (lambda ()
-		    (close-port sock)
-		    (delete-file file)))))
+                  (lambda () (proc file))
+                  (lambda ()
+                    (close-port sock)
+                    (delete-file file)))))
 
 ;; Return the value of THUNK in a child process, or #f if it raises.
 (define (in-child thunk)
@@ -79,17 +79,17 @@
     ((in . out)
      (let ((pid (primitive-fork)))
        (if (zero? pid)
-	   (begin
-	     (close-port in)
-	     (write (false-if-exception (thunk)) out)
-	     (close-port out)
-	     (primitive-exit 0))
-	   (begin
-	     (close-port out)
-	     (let ((result (read in)))
-	       (close-port in)
-	       (waitpid pid)
-	       (and (not (eof-object? result)) result))))))))
+           (begin
+             (close-port in)
+             (write (false-if-exception (thunk)) out)
+             (close-port out)
+             (primitive-exit 0))
+           (begin
+             (close-port out)
+             (let ((result (read in)))
+               (close-port in)
+               (waitpid pid)
+               (and (not (eof-object? result)) result))))))))
 
 (define (landlock-error-irritants thunk)
   (guard (e ((landlock-error? e) (exception-irritants e)))
@@ -100,13 +100,13 @@
   (flush-all-ports)
   (let ((pid (primitive-fork)))
     (if (zero? pid)
-	(begin
-	  (let ((null (open-fdes "/dev/null" O_WRONLY)))
-	    (dup2 null 1)
-	    (dup2 null 2))
-	  (false-if-exception (apply landlock-exec command))
-	  (primitive-exit 127))
-	(status:exit-val (cdr (waitpid pid))))))
+        (begin
+          (let ((null (open-fdes "/dev/null" O_WRONLY)))
+            (dup2 null 1)
+            (dup2 null 2))
+          (false-if-exception (apply landlock-exec command))
+          (primitive-exit 127))
+        (status:exit-val (cdr (waitpid pid))))))
 
 (define %store-rules
   (map (cut landlock-path <> %landlock-read-access #:optional? #t)
@@ -129,7 +129,7 @@
     '(read-file) (unsupported (quiet-table %fs-access) '(read-file) 9))
   (test-assert "read and write access cover all filesystem rights"
     (lset= eq? (map car %fs-access)
-	   (append %landlock-read-access %landlock-write-access)))
+           (append %landlock-read-access %landlock-write-access)))
   (test-assert "unknown right is an error"
     (guard (e ((landlock-error? e) #t))
       (names->mask %fs-access '(read-files) 10)
@@ -141,7 +141,7 @@
     ((@@ (landlock) missing-features)
      9
      (list (landlock-path "/" '(read-file) #:quiet? #t)
-	   (landlock-port 53 '(bind-udp)))
+           (landlock-port 53 '(bind-udp)))
      '((read-file) (bind-tcp bind-udp) () (read-file) () ())
      '(tsync)))
   (test-equal "nothing missing on ABI 10"
@@ -155,22 +155,22 @@
     (landlock-error-irritants
      (lambda ()
        (landlock-restrict! (list (landlock-path test-dir '(read-file read-dir))
-				 (landlock-port 80 '(bind-tcp)))
-			   #:fs '(read-file) #:net '(connect-tcp)
-			   #:best-effort? #f))))
+                                 (landlock-port 80 '(bind-tcp)))
+                           #:fs '(read-file) #:net '(connect-tcp)
+                           #:best-effort? #f))))
   (test-equal "strict mode rejects unhandled quiet rights"
     '((read-file))
     (landlock-error-irritants
      (lambda ()
        (landlock-restrict! '() #:fs '(write-file) #:quiet-fs '(read-file)
-			   #:best-effort? #f))))
+                           #:best-effort? #f))))
   (test-assert "best-effort mode drops unhandled rights"
     (memq (in-child
-	   (lambda ()
-	     (landlock-restrict!
-	      (list (landlock-path test-dir %landlock-read-access))
-	      #:fs '(read-file) #:net '())))
-	  '(fully-enforced not-enforced))))
+           (lambda ()
+             (landlock-restrict!
+              (list (landlock-path test-dir %landlock-read-access))
+              #:fs '(read-file) #:net '())))
+          '(fully-enforced not-enforced))))
 
 (test-group "exec"
   (test-equal "landlock-exec refuses to run unrestricted"
@@ -178,8 +178,8 @@
     (in-child
      (lambda ()
        (landlock-error-irritants
-	(lambda ()
-	  (landlock-exec '() '("true") #:fs '() #:net '())))))))
+        (lambda ()
+          (landlock-exec '() '("true") #:fs '() #:net '())))))))
 
 (unless (< 0 abi 10)
   (test-skip "strict mode"))
@@ -202,40 +202,40 @@
      (test-equal "restrict to paths"
        '(fully-enforced "abc abc abc" #f)
        (in-child
-	(lambda ()
-	  (list (landlock-restrict!
-		 (list (landlock-path test-dir %landlock-read-access)
-		       (landlock-path "/nonexistent" '(read-file)
-				      #:optional? #t)))
-		(read-first-line test-file)
-		(read-first-line outside)))))))
+        (lambda ()
+          (list (landlock-restrict!
+                 (list (landlock-path test-dir %landlock-read-access)
+                       (landlock-path "/nonexistent" '(read-file)
+                                      #:optional? #t)))
+                (read-first-line test-file)
+                (read-first-line outside)))))))
   (test-equal "missing path raises a system error"
     ENOENT
     (in-child
      (lambda ()
        (catch 'system-error
-	 (lambda ()
-	   (landlock-restrict!
-	    (list (landlock-path "/nonexistent" '(read-file)))))
-	 (lambda args (system-error-errno args))))))
+         (lambda ()
+           (landlock-restrict!
+            (list (landlock-path "/nonexistent" '(read-file)))))
+         (lambda args (system-error-errno args))))))
   (test-equal "strict mode rejects directory rights on files"
     `(,test-file (read-dir))
     (in-child
      (lambda ()
        (landlock-error-irritants
-	(lambda ()
-	  (landlock-restrict! (list (landlock-path test-file
-						   '(read-file read-dir)))
-			      #:fs '(read-file read-dir) #:net '()
-			      #:best-effort? #f))))))
+        (lambda ()
+          (landlock-restrict! (list (landlock-path test-file
+                                                   '(read-file read-dir)))
+                              #:fs '(read-file read-dir) #:net '()
+                              #:best-effort? #f))))))
   (call-with-temporary-file
    (lambda (outside)
      (let ((cat (search-path (parse-path (getenv "PATH")) "cat"))
-	   (rules (cons (landlock-path test-dir '(read-file)) %store-rules)))
+           (rules (cons (landlock-path test-dir '(read-file)) %store-rules)))
        (test-equal "exec program beneath allowed path"
-	 0 (exit-status (list rules (list cat test-file) #:net '())))
+         0 (exit-status (list rules (list cat test-file) #:net '())))
        (test-equal "exec'd program can't read outside"
-	 1 (exit-status (list rules (list cat outside) #:net '())))))))
+         1 (exit-status (list rules (list cat outside) #:net '())))))))
 
 (unless (>= abi 10)
   (format #t "Landlock ABI 10 isn't supported, skipping ABI 10 tests.~%")
@@ -247,37 +247,37 @@
     (in-child
      (lambda ()
        (list (landlock-restrict!
-	      (list (landlock-port 0 '(bind-udp))
-		    (landlock-path test-dir '(read-file) #:quiet? #t))
-	      #:quiet-fs '(read-file)
-	      #:flags '(log-same-exec-off tsync)
-	      #:best-effort? #f)
-	     (bind-udp 0)
-	     (bind-udp 54321)))))
+              (list (landlock-port 0 '(bind-udp))
+                    (landlock-path test-dir '(read-file) #:quiet? #t))
+              #:quiet-fs '(read-file)
+              #:flags '(log-same-exec-off tsync)
+              #:best-effort? #f)
+             (bind-udp 0)
+             (bind-udp 54321)))))
   (test-equal "quiet rule without access"
     'fully-enforced
     (in-child
      (lambda ()
        (landlock-restrict! (list (landlock-path test-dir '() #:quiet? #t))
-			   #:quiet-fs '(read-file)
-			   #:best-effort? #f))))
+                           #:quiet-fs '(read-file)
+                           #:best-effort? #f))))
   (test-equal "quiet rule without access isn't skipped"
     ENOENT
     (in-child
      (lambda ()
        (catch 'system-error
-	 (lambda ()
-	   (landlock-restrict! (list (landlock-path "/nonexistent" '()
-						    #:quiet? #t))
-			       #:quiet-fs '(read-file)))
-	 (lambda args (system-error-errno args))))))
+         (lambda ()
+           (landlock-restrict! (list (landlock-path "/nonexistent" '()
+                                                    #:quiet? #t))
+                               #:quiet-fs '(read-file)))
+         (lambda args (system-error-errno args))))))
   (test-equal "quiet rule without handled rights"
     'fully-enforced
     (in-child
      (lambda ()
        (landlock-restrict! (list (landlock-path test-dir '(read-file)
-						#:quiet? #t))
-			   #:fs '(write-file)))))
+                                                #:quiet? #t))
+                           #:fs '(write-file)))))
   (test-equal "best-effort mode drops unhandled quiet rights"
     'fully-enforced
     (in-child
@@ -288,10 +288,10 @@
      (test-equal "resolve-unix on a socket file"
        '(fully-enforced #t)
        (in-child
-	(lambda ()
-	  (list (landlock-restrict! (list (landlock-path file '(resolve-unix)))
-				    #:best-effort? #f)
-		(connect-unix file))))))))
+        (lambda ()
+          (list (landlock-restrict! (list (landlock-path file '(resolve-unix)))
+                                    #:best-effort? #f)
+                (connect-unix file))))))))
 
 (define failures (test-runner-fail-count (test-runner-current)))
 (test-end "landlock")

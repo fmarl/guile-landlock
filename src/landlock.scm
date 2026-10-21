@@ -34,8 +34,15 @@
 
             landlock-path
             landlock-path?
+            landlock-path-path
+            landlock-path-access
+            landlock-path-optional?
+            landlock-path-quiet?
             landlock-port
             landlock-port?
+            landlock-port-port
+            landlock-port-access
+            landlock-port-quiet?
 
             landlock-restrict!
             landlock-exec
@@ -77,6 +84,21 @@
     (log-subdomains-off 2 7)
     (tsync 3 8)))
 
+(define %kinds
+  `((fs ,%fs-access "filesystem access rights")
+    (net ,%net-access "network access rights")
+    (scope ,%scopes "scopes")
+    (flags ,%restrict-flags "flags")))
+
+;; struct landlock_ruleset_attr
+(define %ruleset-fields
+  '((fs . fs)
+    (net . net)
+    (scope . scope)
+    (quiet-fs . fs)
+    (quiet-net . net)
+    (quiet-scope . scope)))
+
 (define %quiet-abi 10)
 
 (define (quiet-table table)
@@ -84,11 +106,20 @@
          ((name bit abi) (list name bit (max abi %quiet-abi))))
        table))
 
+(define (field-table field)
+  (let ((kind (assq-ref %ruleset-fields field)))
+    (if (eq? field kind)
+        (second (assq kind %kinds))
+        (quiet-table (field-table kind)))))
+
 (define %landlock-read-access
   '(execute read-file read-dir))
 
 (define %landlock-write-access
   (lset-difference eq? (map first %fs-access) %landlock-read-access))
+
+(define %enforcement-levels
+  '(not-enforced partially-enforced fully-enforced))
 
 (define-exception-type &landlock-error &error
   make-landlock-error
@@ -101,19 +132,22 @@
                    (make-exception-with-message message)
                    (make-exception-with-irritants irritants))))
 
-(define (lookup table name)
-  (or (assq-ref table name)
-      (raise-landlock-error "unknown access right or flag" name)))
-
-(define (expand table names)
-  (if (eq? names 'all)
-      (map first table)
-      names))
+(define (check-names kind names)
+  (match (assq kind %kinds)
+    ((_ table what)
+     (match names
+       ('all (map first table))
+       (((? symbol?) ...)
+        (match (remove (cut assq <> table) names)
+          (() names)
+          (unknown (raise-landlock-error (string-append "unknown " what)
+                                         unknown))))
+       (_ (raise-landlock-error (string-append "invalid " what) names))))))
 
 (define (names->mask table names abi)
   "Return the bitmask of NAMES from TABLE that ABI supports."
   (fold (lambda (name mask)
-          (match (lookup table name)
+          (match (assq-ref table name)
             ((bit since) (if (>= abi since) (logior mask (ash 1 bit)) mask))))
         0
         names))
@@ -121,9 +155,12 @@
 (define (unsupported table names abi)
   "Return the NAMES from TABLE that ABI doesn't support."
   (filter (lambda (name)
-            (match (lookup table name)
+            (match (assq-ref table name)
               ((_ since) (< abi since))))
           names))
+
+(define (group key names)
+  (if (null? names) '() `((,key ,@names))))
 
 (define-record-type <landlock-path>
   (make-landlock-path path access optional? quiet?)
@@ -134,10 +171,13 @@
   (quiet? landlock-path-quiet?))
 
 (define* (landlock-path path access #:key optional? quiet?)
-  "Allow ACCESS, a list of filesystem access rights, beneath PATH.  An
-OPTIONAL? path is skipped if it doesn't exist.  Denials of QUIET? paths aren't
-logged for the access rights given as #:quiet-fs to landlock-restrict!."
-  (make-landlock-path path access optional? quiet?))
+  "Allow ACCESS, a list of filesystem access rights or 'all, beneath PATH.  An
+OPTIONAL? path is skipped if it doesn't exist or isn't accessible.  Denials of
+QUIET? paths aren't logged for the access rights given as #:quiet-fs to
+landlock-restrict!."
+  (unless (string? path)
+    (raise-landlock-error "invalid path" path))
+  (make-landlock-path path (check-names 'fs access) optional? quiet?))
 
 (define-record-type <landlock-port>
   (make-landlock-port port access quiet?)
@@ -147,21 +187,33 @@ logged for the access rights given as #:quiet-fs to landlock-restrict!."
   (quiet? landlock-port-quiet?))
 
 (define* (landlock-port port access #:key quiet?)
-  "Allow ACCESS, a list of network access rights, on PORT."
-  (make-landlock-port port access quiet?))
+  "Allow ACCESS, a list of network access rights or 'all, on PORT."
+  (unless (and (exact-integer? port) (<= 0 port 65535))
+    (raise-landlock-error "invalid port" port))
+  (make-landlock-port port (check-names 'net access) quiet?))
 
-(define (rule-unsupported rule abi)
-  (match rule
-    (($ <landlock-path> _ access _ quiet?)
-     (append (unsupported %fs-access access abi)
-             (if (and quiet? (< abi %quiet-abi)) '(quiet) '())))
-    (($ <landlock-port> _ access quiet?)
-     (append (unsupported %net-access access abi)
-             (if (and quiet? (< abi %quiet-abi)) '(quiet) '())))))
+(define (check-rules rules)
+  (unless (and (list? rules)
+               (every (lambda (rule)
+                        (or (landlock-path? rule) (landlock-port? rule)))
+                      rules))
+    (raise-landlock-error "invalid rules" rules)))
 
-(define %landlock-create-ruleset 444)
-(define %landlock-add-rule 445)
-(define %landlock-restrict-self 446)
+(define (syscall-offset host-type pointer-size)
+  (let ((arch (car (string-split host-type #\-))))
+    (cond ((string-prefix? "alpha" arch) 110)
+          ((string-prefix? "mips" arch)
+           (cond ((= pointer-size 8) 5000)                ; n64
+                 ((string-prefix? "mips64" arch) 6000)    ; n32
+                 (else 4000)))                            ; o32
+          ((and (string=? arch "x86_64") (= pointer-size 4))
+           #x40000000)                                    ; x32
+          (else 0))))
+
+(define %landlock-create-ruleset
+  (+ 444 (syscall-offset %host-type (sizeof '*))))
+(define %landlock-add-rule (+ %landlock-create-ruleset 1))
+(define %landlock-restrict-self (+ %landlock-create-ruleset 2))
 
 (define %create-ruleset-version 1)
 (define %create-ruleset-errata 2)
@@ -170,50 +222,43 @@ logged for the access rights given as #:quiet-fs to landlock-restrict!."
 (define %rule-net-port 2)
 (define %pr-set-no-new-privs 38)
 
-(define (check-result name)
-  (lambda (result errno)
-    (if (< result 0)
-        (throw 'system-error name "~A" (list (strerror errno)) (list errno))
-        result)))
+(define (checked name proc . leading)
+  (lambda args
+    (call-with-values (cut apply proc (append leading args))
+      (lambda (result errno)
+        (if (< result 0)
+            (throw 'system-error name "~A"
+                   (list (strerror errno)) (list errno))
+            result)))))
 
-(define (syscall name number arg-types)
-  (let ((proc (foreign-library-function #f "syscall"
-                                        #:return-type long
-                                        #:arg-types (cons long arg-types)
-                                        #:return-errno? #t)))
-    (lambda args
-      (call-with-values (cut apply proc number args)
-        (check-result name)))))
+(define (c-function name return-type arg-types)
+  (foreign-library-function #f name
+                            #:return-type return-type
+                            #:arg-types arg-types
+                            #:return-errno? #t))
+
+(define (syscall name number . arg-types)
+  (checked name (c-function "syscall" long (cons long arg-types)) number))
 
 (define create-ruleset
   (syscall "landlock_create_ruleset" %landlock-create-ruleset
-           (list '* unsigned-long unsigned-long)))
+           '* unsigned-long unsigned-long))
 
 (define add-rule
   (syscall "landlock_add_rule" %landlock-add-rule
-           (list long long '* unsigned-long)))
+           long long '* unsigned-long))
 
 (define restrict-self
   (syscall "landlock_restrict_self" %landlock-restrict-self
-           (list long unsigned-long)))
+           long unsigned-long))
 
 (define set-no-new-privs!
-  (let ((prctl (foreign-library-function #f "prctl"
-                                         #:return-type int
-                                         #:arg-types (list int unsigned-long unsigned-long
-                                                           unsigned-long unsigned-long)
-                                         #:return-errno? #t)))
-    (lambda ()
-      (call-with-values (cut prctl %pr-set-no-new-privs 1 0 0 0)
-        (check-result "prctl")))))
+  (checked "prctl"
+           (c-function "prctl" int (cons int (make-list 4 unsigned-long)))
+           %pr-set-no-new-privs 1 0 0 0))
 
 (define (u64-struct . fields)
-  (let ((bv (make-bytevector (* 8 (length fields)))))
-    (for-each (lambda (field index)
-                (bytevector-u64-native-set! bv (* 8 index) field))
-              fields
-              (iota (length fields)))
-    bv))
+  (uint-list->bytevector fields (native-endianness) 8))
 
 (define (path-beneath-attr access fd)
   ;; Packed struct: __u64 followed by __s32.
@@ -221,11 +266,6 @@ logged for the access rights given as #:quiet-fs to landlock-restrict!."
     (bytevector-u64-native-set! bv 0 access)
     (bytevector-s32-native-set! bv 8 fd)
     bv))
-
-(define (call-with-fdes fd proc)
-  (dynamic-wind (const #t)
-                (cut proc fd)
-                (cut close-fdes fd)))
 
 (define (landlock-abi-version)
   "Return the Landlock ABI version of the running kernel, or 0 if Landlock is
@@ -243,139 +283,202 @@ unsupported or disabled."
   (and (>= (landlock-abi-version) 7)
        (create-ruleset %null-pointer 0 %create-ruleset-errata)))
 
+(define (target-abi abi)
+  (unless (or (not abi) (and (exact-integer? abi) (>= abi 0)))
+    (raise-landlock-error "invalid ABI version" abi))
+  (let ((kernel (landlock-abi-version)))
+    (min kernel (or abi kernel))))
+
+(define (call-with-fdes fd proc)
+  (dynamic-wind (const #t)
+                (cut proc fd)
+                (cut close-fdes fd)))
+
 (define (open-path path optional?)
   "Return an O_PATH file descriptor for PATH, or #f if PATH is OPTIONAL? and
 doesn't exist or isn't accessible."
   (catch 'system-error
     (cut open-fdes path (logior O_PATH O_CLOEXEC))
     (lambda args
-      (if (and optional? (memv (system-error-errno args) (list ENOENT EACCES)))
+      (if (and optional?
+               (memv (system-error-errno args) (list ENOENT ENOTDIR EACCES)))
           #f
           (apply throw args)))))
 
+;; The kernel rejects directory rights on files.
 (define %file-access
   '(execute write-file read-file truncate ioctl-dev resolve-unix))
 
-;; The kernel rejects directory rights on files.
-(define (file-mask path access mask abi best-effort?)
-  (let ((directory-access (lset-difference eq? access %file-access)))
-    (when (and (not best-effort?) (pair? directory-access))
-      (raise-landlock-error "directory access rights on a file"
-                            path directory-access))
-    (logand mask (names->mask %fs-access %file-access abi))))
+(define (path-access rule fd)
+  (if (eq? 'directory (stat:type (stat fd)))
+      (landlock-path-access rule)
+      (lset-intersection eq? (landlock-path-access rule) %file-access)))
 
-(define (add-rule! ruleset-fd rule abi masks best-effort?)
-  "Add RULE to RULESET-FD, limited to the rights handled by MASKS."
-  ;; The kernel rejects quiet rules without access if nothing is quiet.
-  (define (quiet-flag quiet? quiet-mask)
-    (if (and quiet? (not (zero? quiet-mask))) %add-rule-quiet 0))
+(define (for-each-rule proc rules)
+  (for-each (lambda (rule)
+              (match rule
+                ((? landlock-port?)
+                 (proc rule #f (landlock-port-access rule)))
+                ((? landlock-path?)
+                 (match (open-path (landlock-path-path rule)
+                                   (landlock-path-optional? rule))
+                   (#f #f)
+                   (fd (call-with-fdes fd
+                         (lambda (fd)
+                           (proc rule fd (path-access rule fd)))))))))
+            rules))
 
-  (match-let (((fs net _ quiet-fs quiet-net _) masks))
-    (match rule
-      (($ <landlock-path> path access optional? quiet?)
-       (let ((mask (logand fs (names->mask %fs-access access abi)))
-             (flags (quiet-flag quiet? quiet-fs)))
-         (unless (and (zero? mask) (zero? flags))
-           (let ((fd (open-path path optional?)))
-             (when fd
-               (call-with-fdes fd
-                 (lambda (fd)
-                   (let ((mask (if (eq? 'directory (stat:type (stat fd)))
-                                   mask
-                                   (file-mask path access mask abi
-                                              best-effort?))))
-                     (unless (and (zero? mask) (zero? flags))
-                       (add-rule ruleset-fd %rule-path-beneath
-                                 (bytevector->pointer
-                                  (path-beneath-attr mask fd))
-                                 flags))))))))))
-      (($ <landlock-port> port access quiet?)
-       (let ((mask (logand net (names->mask %net-access access abi)))
-             (flags (quiet-flag quiet? quiet-net)))
-         (unless (and (zero? mask) (zero? flags))
-           (add-rule ruleset-fd %rule-net-port
-                     (bytevector->pointer (u64-struct mask port))
-                     flags)))))))
+(define (check-file-access rule fd access)
+  (when (landlock-path? rule)
+    (match (lset-difference eq? (landlock-path-access rule) access)
+      (() #t)
+      (rights (raise-landlock-error "directory access rights on a file"
+                                    (landlock-path-path rule) rights)))))
 
-(define %ruleset-attr-tables
-  (list %fs-access %net-access %scopes
-        (quiet-table %fs-access) (quiet-table %net-access) (quiet-table %scopes)))
+(define (ruleset-names fs net scope quiet-fs quiet-net quiet-scope)
+  (map (match-lambda*
+         (((field . kind) names) (cons field (check-names kind names))))
+       %ruleset-fields
+       (list fs net scope quiet-fs quiet-net quiet-scope)))
 
-(define (missing-features abi rules attr flags)
-  "Return the access rights and flags in RULES, ATTR and FLAGS that ABI doesn't
-support.  ATTR lists the names for each of %ruleset-attr-tables."
-  (delete-duplicates
-   (append (append-map (cut unsupported <> <> abi) %ruleset-attr-tables attr)
-           (unsupported %restrict-flags flags abi)
-           (append-map (cut rule-unsupported <> abi) rules))))
-
-(define (unhandled-access rules attr)
-  "Return the access rights in RULES and in the quiet lists of ATTR that ATTR
+(define (unhandled-access rules names)
+  "Return the access rights in RULES and the quiet fields of NAMES that NAMES
 doesn't handle."
-  (match attr
-    ((fs net scope quiet-fs quiet-net quiet-scope)
-     (delete-duplicates
-      (append (append-map (match-lambda
-                            (($ <landlock-path> _ access)
-                             (lset-difference eq? access fs))
-                            (($ <landlock-port> _ access)
-                             (lset-difference eq? access net)))
-                          rules)
-              (lset-difference eq? quiet-fs fs)
-              (lset-difference eq? quiet-net net)
-              (lset-difference eq? quiet-scope scope))))))
+  (define (unhandled rights field)
+    (lset-difference eq? rights (assq-ref names field)))
 
-;; The kernel rejects quiet rights that aren't handled.
-(define (attr-masks abi attr)
-  (match (map (cut names->mask <> <> abi) %ruleset-attr-tables attr)
-    ((fs net scope quiet-fs quiet-net quiet-scope)
-     (list fs net scope
-           (logand fs quiet-fs) (logand net quiet-net)
-           (logand scope quiet-scope)))))
+  (define (rule-access rule? access)
+    (delete-duplicates (append-map access (filter rule? rules))))
 
-(define (enforce! abi rules attr flags best-effort?)
-  (let ((masks (attr-masks abi attr)))
-    (call-with-fdes
-        (create-ruleset (bytevector->pointer (apply u64-struct masks))
-                        (* 8 (length %ruleset-attr-tables))
-                        0)
-      (lambda (ruleset-fd)
-        (for-each (cut add-rule! ruleset-fd <> abi masks best-effort?) rules)
-        (set-no-new-privs!)
-        (restrict-self ruleset-fd (names->mask %restrict-flags flags abi))))))
+  (append (group 'path-rules
+                 (unhandled (rule-access landlock-path? landlock-path-access)
+                            'fs))
+          (group 'port-rules
+                 (unhandled (rule-access landlock-port? landlock-port-access)
+                            'net))
+          (append-map (match-lambda
+                        ((field . kind)
+                         (group field
+                                (unhandled (assq-ref names field) kind))))
+                      %ruleset-fields)))
+
+(define (missing-features names flags abi)
+  "Return the NAMES and FLAGS that ABI doesn't support."
+  (append (append-map (lambda (field)
+                        (group field (unsupported (field-table field)
+                                                  (assq-ref names field)
+                                                  abi)))
+                      (map first %ruleset-fields))
+          (group 'flags (unsupported %restrict-flags flags abi))))
+
+(define (ruleset-masks names abi)
+  (define (mask field)
+    (names->mask (field-table field) (assq-ref names field) abi))
+
+  ;; The kernel rejects quiet rights that aren't handled.
+  (map (match-lambda
+         ((field . kind) (cons field (logand (mask kind) (mask field)))))
+       %ruleset-fields))
+
+(define (add-rule! ruleset-fd rule fd access masks abi)
+  "Add RULE to RULESET-FD, limited to the rights handled by MASKS."
+  (define (add! type attr kind quiet-field quiet?)
+    (let ((mask (logand (assq-ref masks kind)
+                        (names->mask (field-table kind) access abi)))
+          ;; The kernel rejects quiet rules if nothing is quiet.
+          (flags (if (and quiet? (not (zero? (assq-ref masks quiet-field))))
+                     %add-rule-quiet
+                     0)))
+      (unless (and (zero? mask) (zero? flags))
+        (add-rule ruleset-fd type (bytevector->pointer (attr mask)) flags))))
+
+  (match rule
+    ((? landlock-path?)
+     (add! %rule-path-beneath (cut path-beneath-attr <> fd)
+           'fs 'quiet-fs (landlock-path-quiet? rule)))
+    ((? landlock-port?)
+     (add! %rule-net-port (cut u64-struct <> (landlock-port-port rule))
+           'net 'quiet-net (landlock-port-quiet? rule)))))
+
+(define (enforce! rules masks flags abi check)
+  (call-with-fdes
+      (create-ruleset (bytevector->pointer
+                       (apply u64-struct
+                              (map (compose (cut assq-ref masks <>) first)
+                                   %ruleset-fields)))
+                      (* 8 (length %ruleset-fields))
+                      0)
+    (lambda (ruleset-fd)
+      (for-each-rule (lambda (rule fd access)
+                       (check rule fd access)
+                       (add-rule! ruleset-fd rule fd access masks abi))
+                     rules)
+      (set-no-new-privs!)
+      (restrict-self ruleset-fd (names->mask %restrict-flags flags abi)))))
+
+(define (enforcement masks missing)
+  (cond
+   ;; The kernel rejects rulesets that handle nothing.
+   ((every (compose zero? (cut assq-ref masks <>)) '(fs net scope))
+    'not-enforced)
+   ((null? missing) 'fully-enforced)
+   (else 'partially-enforced)))
+
+(define (check-enforcement result required abi missing)
+  (unless (memq result (member required %enforcement-levels))
+    (if (null? missing)
+        (raise-landlock-error "Landlock isn't enforced")
+        (apply raise-landlock-error
+               (format #f "not supported by Landlock ABI ~a" abi)
+               missing))))
 
 (define* (landlock-restrict! rules
                              #:key
                              (fs 'all) (net 'all) (scope '())
                              (quiet-fs '()) (quiet-net '()) (quiet-scope '())
-                             (flags '())
-                             (best-effort? #t))
-  "Restrict the calling thread and its future children to RULES.  Without
-BEST-EFFORT?, raise a landlock-error for anything that can't be enforced.
-Return 'fully-enforced, 'partially-enforced or 'not-enforced."
-  (let* ((abi (landlock-abi-version))
-         (attr (map expand %ruleset-attr-tables
-                    (list fs net scope quiet-fs quiet-net quiet-scope)))
-         (unhandled (unhandled-access rules attr))
-         (missing (missing-features abi rules attr flags)))
-    (cond
-     ((and (not best-effort?) (pair? unhandled))
-      (raise-landlock-error "access rights not handled by the ruleset"
-                            unhandled))
-     ((and (not best-effort?) (pair? missing))
-      (raise-landlock-error
-       (format #f "not supported by Landlock ABI ~a" abi) missing))
-     ;; The kernel rejects empty rulesets.
-     ((or (zero? abi) (every zero? (take (attr-masks abi attr) 3)))
-      'not-enforced)
-     (else
-      (enforce! abi rules attr flags best-effort?)
-      (if (null? missing) 'fully-enforced 'partially-enforced)))))
+                             (flags '(tsync))
+                             abi
+                             (require 'partially-enforced))
+  "Restrict all threads, or only the calling one without tsync, and their
+future children to RULES, using at most Landlock ABI version ABI.  Raise a
+landlock-error unless the result is at least REQUIRE.  Return 'fully-enforced,
+'partially-enforced or 'not-enforced."
+  (check-rules rules)
+  (unless (memq require %enforcement-levels)
+    (raise-landlock-error "invalid requirement" require))
+  (let* ((abi (target-abi abi))
+         (names (ruleset-names fs net scope quiet-fs quiet-net quiet-scope))
+         (flags (check-names 'flags flags))
+         (masks (ruleset-masks names abi))
+         (missing (missing-features names flags abi))
+         (result (enforcement masks missing))
+         (enforced? (not (eq? result 'not-enforced)))
+         (strict? (eq? require 'fully-enforced))
+         (check (if strict? check-file-access (const #t))))
+    (when strict?
+      (match (unhandled-access rules names)
+        (() #t)
+        (unhandled (apply raise-landlock-error
+                          "access rights not handled by the ruleset"
+                          unhandled))))
+    (unless enforced?
+      (for-each-rule check rules))
+    (check-enforcement result require abi missing)
+    (when enforced?
+      (enforce! rules masks flags abi check))
+    result))
 
-(define (landlock-exec rules command . options)
+(define* (landlock-exec rules command
+                        #:key abi #:allow-other-keys #:rest options)
   "Restrict the process to RULES, see landlock-restrict! for OPTIONS, and
-replace it with COMMAND, a list of the program and its arguments.  Raise a
-landlock-error instead of running COMMAND unrestricted."
-  (when (eq? 'not-enforced (apply landlock-restrict! rules options))
-    (raise-landlock-error "Landlock isn't enforced" command))
-  (apply execl (first command) command))
+replace it with COMMAND, a list of the program's file name and its
+arguments.  Raise a landlock-error instead of running COMMAND unrestricted."
+  (match command
+    (((? string? program) (? string?) ...)
+     ;; Exec ends other threads, so tsync only matters if it fails.
+     (let ((flags (if (>= (target-abi abi) 8) '(tsync) '())))
+       (when (eq? 'not-enforced
+                  (apply landlock-restrict! rules #:flags flags options))
+         (raise-landlock-error "Landlock isn't enforced" command))
+       (apply execl program command)))
+    (_ (raise-landlock-error "invalid command" command))))

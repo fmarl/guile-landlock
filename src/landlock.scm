@@ -342,7 +342,7 @@ doesn't exist or isn't accessible."
        (list fs net scope quiet-fs quiet-net quiet-scope)))
 
 (define (unhandled-access rules names)
-  "Return the access rights in RULES and the quiet fields of NAMES that NAMES
+  "Return the rights that RULES and the quiet fields of NAMES use but NAMES
 doesn't handle."
   (define (unhandled rights field)
     (lset-difference eq? rights (assq-ref names field)))
@@ -439,10 +439,13 @@ doesn't handle."
                              (flags '(tsync))
                              abi
                              (require 'partially-enforced))
-  "Restrict all threads, or only the calling one without tsync, and their
-future children to RULES, using at most Landlock ABI version ABI.  Raise a
-landlock-error unless the result is at least REQUIRE.  Return 'fully-enforced,
-'partially-enforced or 'not-enforced."
+  "Restrict the threads of this process and their future children to RULES,
+using at most Landlock ABI version ABI.  Without the tsync flag, only the
+calling thread is restricted.
+
+Return 'fully-enforced, 'partially-enforced if the ABI lacks some of the
+requested features, or 'not-enforced if it handles none of them.  Raise an
+error instead if the result is below REQUIRE."
   (check-rules rules)
   (unless (memq require %enforcement-levels)
     (raise-landlock-error "invalid requirement" require))
@@ -470,9 +473,9 @@ landlock-error unless the result is at least REQUIRE.  Return 'fully-enforced,
 
 (define* (landlock-exec rules command
                         #:key abi #:allow-other-keys #:rest options)
-  "Restrict the process to RULES, see landlock-restrict! for OPTIONS, and
-replace it with COMMAND, a list of the program's file name and its
-arguments.  Raise a landlock-error instead of running COMMAND unrestricted."
+  "Restrict the process to RULES and replace it with COMMAND, a list of the
+program's file name and its arguments.  OPTIONS are those of
+landlock-restrict!.  Raise an error instead of running COMMAND unrestricted."
   (match command
     (((? string? program) (? string?) ...)
      ;; Exec ends other threads, so tsync only matters if it fails.
